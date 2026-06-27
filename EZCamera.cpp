@@ -4,6 +4,7 @@
 #include <QThread>
 #include <QWidget>
 #include <QTimer>
+#include <QDateTime>
 #include <iostream>
 #include <string>
 #include <regex>
@@ -817,22 +818,29 @@ void EZCamera::handleFrame(void* data, int width, int height, int stride)
 		return;
 	}
 
-	// GUI 还有一帧没处理完，就直接丢掉当前帧
-	bool expected = false;
-	if (!m_framePending.compare_exchange_strong(expected, true))
-	{
-		return;
-	}
-
 	const int yBytes = stride * height;
 	const int uvBytes = stride * height / 2;
 	const int total = yBytes + uvBytes;
 
 	QByteArray buf;
-	if (data != nullptr && total > 0)
+
+	if (data != nullptr && total > 0 && width > 0 && height > 0 && stride > 0)
 	{
 		buf.resize(total);
 		memcpy(buf.data(), data, size_t(total));
+
+		{
+			QMutexLocker locker(&m_frameMutex);
+
+			m_latestFrame.nv12 = buf;
+			m_latestFrame.width = width;
+			m_latestFrame.height = height;
+			m_latestFrame.stride = stride;
+			m_latestFrame.frameId = ++m_frameId;
+			m_latestFrame.timestampMs = QDateTime::currentMSecsSinceEpoch();
+
+			m_frameWait.wakeAll();
+		}
 	}
 
 	emit signalFrameReady(buf, width, height, stride);
@@ -1567,5 +1575,58 @@ bool EZCamera::extractUniqueId(const std::string& strSymbolicLink, std::string& 
 
 	uniqueId = instancePart.substr(a1 + 1, a2 - a1 - 1);
 	return !uniqueId.empty();
+}
+
+bool EZCamera::getLatestFrame(EZCameraFrame& outFrame) const
+{
+	QMutexLocker locker(&m_frameMutex);
+
+	if (!m_latestFrame.isValid())
+	{
+		return false;
+	}
+
+	outFrame = m_latestFrame;
+	return true;
+}
+
+void EZCamera::clearFrameMarker()
+{
+	QMutexLocker locker(&m_frameMutex);
+	m_clearedFrameId = m_frameId;
+}
+
+bool EZCamera::waitForNewFrame(EZCameraFrame& outFrame, int timeoutMs)
+{
+	QMutexLocker locker(&m_frameMutex);
+
+	const qint64 targetFrameId = m_clearedFrameId;
+
+	if (m_latestFrame.isValid() && m_latestFrame.frameId > targetFrameId)
+	{
+		outFrame = m_latestFrame;
+		return true;
+	}
+
+	bool ok = m_frameWait.wait(&m_frameMutex, timeoutMs);
+
+	if (!ok)
+	{
+		return false;
+	}
+
+	if (!m_latestFrame.isValid())
+	{
+		return false;
+	}
+
+	if (m_latestFrame.frameId <= targetFrameId)
+	{
+		return false;
+	}
+
+	outFrame = m_latestFrame;
+
+	return true;
 }
 

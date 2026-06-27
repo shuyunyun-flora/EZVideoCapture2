@@ -1,6 +1,9 @@
 #pragma once
 
 #include <QObject>
+#include <QMutex>
+#include <QWaitCondition>
+#include <QElapsedTimer>
 
 struct CameraInfo
 {
@@ -8,6 +11,22 @@ struct CameraInfo
 	QString symbolicLink;
 	CameraInfo(QString strName, QString strLink) : friendlyName(strName), symbolicLink(strLink) {}
 };
+
+struct EZCameraFrame
+{
+	QByteArray nv12;
+	int width = 0;
+	int height = 0;
+	int stride = 0;
+	qint64 frameId = 0;
+	qint64 timestampMs = 0;
+
+	bool isValid() const
+	{
+		return !nv12.isEmpty() && width > 0 && height > 0 && stride > 0;
+	}
+};
+
 class QWidget;
 class EZCamera  : public QObject
 {
@@ -37,6 +56,10 @@ public:
 	bool setContrastAuto(bool enable);
 	bool setContrastValue(long value);
 	bool getContrastValue(long& value, long& flags) const;
+
+	bool getLatestFrame(EZCameraFrame& outFrame) const;
+	bool waitForNewFrame(EZCameraFrame& outFrame, int timeoutMs = 1000);
+	void clearFrameMarker();
 
 private:
 	bool getVideoProcAmpRange(long property, long& min, long& max, long& step, long& def, long& flags) const;
@@ -85,6 +108,14 @@ private:
 	int m_nFrameWidth = 0;
 	int m_nFrameHeight = 0;
 	QString m_strFormat = "";
+
+private:
+	mutable QMutex m_frameMutex;
+	QWaitCondition m_frameWait;
+
+	EZCameraFrame m_latestFrame;
+	qint64 m_frameId = 0;
+	qint64 m_clearedFrameId = 0;
 
 public:
 	QWidget* m_pRenderWidget = nullptr;
