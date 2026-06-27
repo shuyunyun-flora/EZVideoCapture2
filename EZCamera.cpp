@@ -491,179 +491,6 @@ QString HrToString(HRESULT hr)
 		.arg(msg);
 }
 
-class SourceReaderCB : public IMFSourceReaderCallback
-{
-public:
-	SourceReaderCB()
-	{
-
-	}
-
-	~SourceReaderCB()
-	{
-		qDebug() << "SourceReaderCB destroyed.";
-	}
-
-public:
-	long m_refCount = 1;
-
-	// IUnknown
-	STDMETHODIMP QueryInterface(REFIID iid, void** ppv)
-	{
-		if (iid == __uuidof(IMFSourceReaderCallback) ||
-			iid == __uuidof(IUnknown))
-		{
-			*ppv = static_cast<IMFSourceReaderCallback*>(this);
-			AddRef();
-			return S_OK;
-		}
-		*ppv = nullptr;
-		return E_NOINTERFACE;
-	}
-
-	STDMETHODIMP_(ULONG) AddRef()
-	{
-		return InterlockedIncrement(&m_refCount);
-	}
-
-	STDMETHODIMP_(ULONG) Release()
-	{
-		long c = InterlockedDecrement(&m_refCount);
-		if (c == 0)
-		{
-			delete this;
-		}
-
-		return c;
-	}
-
-	// 关键回调
-	STDMETHODIMP OnReadSample(
-		HRESULT hrStatus,
-		DWORD dwStreamIndex,
-		DWORD dwStreamFlags,
-		LONGLONG llTimestamp,
-		IMFSample* pSample)
-	{
-		if (FAILED(hrStatus))
-		{
-			this->m_bExitedReadSample = true;
-			QString strError = HrToString(hrStatus);
-			qDebug() << "ReadSample failed: " << strError;
-			QCoreApplication::postEvent(this->m_pOwner->m_pRenderWidget, new EZCameraDeviceErrorEvent(strError, 123));
-
-			return hrStatus;
-		}
-		if (!this->m_bIsRunning.load(std::memory_order_acquire))
-		{
-			this->m_bExitedReadSample = true;
-			return S_OK;
-		}
-
-		if (pSample)
-		{
-			IMFMediaType* pType = nullptr;
-			UINT32 width = 0;
-			UINT32 height = 0;
-			LONG stride = 0;
-
-			HRESULT hr = m_reader->GetCurrentMediaType(
-				MF_SOURCE_READER_FIRST_VIDEO_STREAM,
-				&pType);
-
-			if (SUCCEEDED(hr))
-			{
-				MFGetAttributeSize(pType, MF_MT_FRAME_SIZE, &width, &height);
-				LONG lStride = 0;
-				GetDefaultStride(pType, &lStride);
-				stride = lStride;
-
-				GUID subtype = { 0 };
-
-				hr = pType->GetGUID(MF_MT_SUBTYPE, &subtype);
-
-			/*	if (SUCCEEDED(hr))
-				{
-					if (subtype == MFVideoFormat_NV12)
-					{
-						OutputDebugString(L"Format = NV12\n");
-					}
-					else if (subtype == MFVideoFormat_YUY2)
-					{
-						OutputDebugString(L"Format = YUY2\n");
-					}
-					else if (subtype == MFVideoFormat_RGB32)
-					{
-						OutputDebugString(L"Format = RGB32\n");
-					}
-				}*/
-
-				pType->Release();
-			}
-
-			IMFMediaBuffer* pBuffer = nullptr;
-			pSample->ConvertToContiguousBuffer(&pBuffer);
-
-			BYTE* pData = nullptr;
-			DWORD maxLen = 0, curLen = 0;
-
-			pBuffer->Lock(&pData, &maxLen, &curLen);
-
-			this->m_pOwner->handleFrame(pData, width, height, stride);
-
-			pBuffer->Unlock();
-			pBuffer->Release();
-		}
-		else
-		{
-			this->m_pOwner->handleFrame(nullptr, 0, 0, 0);
-		}
-
-		HRESULT hr = S_OK;
-		if (this->m_bIsRunning.load(std::memory_order_acquire))		// 请求下一帧
-		{
-			hr = m_reader->ReadSample(
-					MF_SOURCE_READER_FIRST_VIDEO_STREAM,
-					0, nullptr, nullptr, nullptr, nullptr);
-		}
-		else
-		{
-			this->m_bExitedReadSample = true;
-		}
-
-		return S_OK;
-	}
-
-	STDMETHODIMP OnEvent(DWORD, IMFMediaEvent*) 
-	{ 
-		qDebug() << "callback onevent";
-		return S_OK; 
-	}
-
-	STDMETHODIMP OnFlush(DWORD) 
-	{ 
-		return S_OK;
-	}
-
-public:
-	void setOwner(EZCamera* pOwner)
-	{
-		this->m_pOwner = pOwner;
-	}
-
-	void setReader(IMFSourceReader* reader)
-	{
-		this->m_reader = reader;
-	}
-
-	std::atomic<bool> m_bIsRunning{ false };
-	EZCamera* m_pOwner = nullptr;
-	bool m_bExitedReadSample = true;
-
-private:
-	IMFSourceReader* m_reader = nullptr;
-};
-
 static bool FindVideoCaptureFilterByName(const QString& friendlyName, IBaseFilter** ppFilter)
 {
 	if (!ppFilter) return false;
@@ -774,121 +601,208 @@ EZCamera::~EZCamera()
 
 void EZCamera::start()
 {
+#ifdef Q_OS_WIN
 	this->CreateVideoDeviceSource(&this->m_pMediaSource);
-	if (NULL == this->m_pMediaSource)
+	if (nullptr == this->m_pMediaSource)
 	{
 		QString strError = QString("Failed to create media source for device: %1").arg(this->m_strName);
 		QCoreApplication::postEvent(this->m_pRenderWidget, new EZCameraDeviceErrorEvent(strError, 123));
+		return;
+	}
+
+	this->SetHighestNV12(this->m_pMediaSource);
+
+	IMFSourceReader* pReader = nullptr;
+
+	HRESULT hr = MFCreateSourceReaderFromMediaSource(
+		static_cast<IMFMediaSource*>(this->m_pMediaSource),
+		nullptr,        // 关键：同步模式，不设置 MF_SOURCE_READER_ASYNC_CALLBACK
+		&pReader);
+
+	if (FAILED(hr) || nullptr == pReader)
+	{
+		QString strError = QString("MFCreateSourceReaderFromMediaSource failed: %1").arg(HrToString(hr));
+		QCoreApplication::postEvent(this->m_pRenderWidget, new EZCameraDeviceErrorEvent(strError, 123));
+
+		IMFMediaSource* pSource = static_cast<IMFMediaSource*>(this->m_pMediaSource);
+		if (pSource)
+		{
+			pSource->Shutdown();
+			pSource->Release();
+			this->m_pMediaSource = nullptr;
+		}
 
 		return;
 	}
 
-	//this->EnumerateCaptureFormats(this->m_pMediaSource);
-	this->SetHighestNV12(this->m_pMediaSource);
-
-	SourceReaderCB* pCallback = new SourceReaderCB();
-	pCallback->setOwner(this);
-	this->m_callback = pCallback;
-	IMFAttributes* pAttr = nullptr;
-	HRESULT hr = MFCreateAttributes(&pAttr, 1);
-	if (SUCCEEDED(hr))
-	{
-		hr = pAttr->SetUnknown(MF_SOURCE_READER_ASYNC_CALLBACK, pCallback);
-		this->m_pAttributes = pAttr;
-	}
-
-	IMFSourceReader* pReader = nullptr;
-	if (SUCCEEDED(hr))
-	{
-		MFCreateSourceReaderFromMediaSource(
-			(IMFMediaSource*)this->m_pMediaSource,
-			pAttr,
-			&pReader);
-	}
-
-	pCallback->setReader(pReader);
 	this->m_pSourceReader = pReader;
 	this->m_bIsRunning.store(true, std::memory_order_release);
-	pCallback->m_bIsRunning.store(true, std::memory_order_release);
-	pCallback->m_bExitedReadSample = false;
 
-	this->handleFrame(nullptr, 0, 0, 0);	// 先发个空帧通知 UI 刷新一下(如果相机启动不了，OnReadSample可能都不会进入，所以这里先发个空帧刷新一下UI, 否则会显示上次的图像)
-	// 启动异步读取
-	hr = pReader->ReadSample(
-			MF_SOURCE_READER_FIRST_VIDEO_STREAM,
-			0,
-			nullptr,
-			nullptr,
-			nullptr,
-			nullptr
-		);
-	qDebug() << this->m_strName << " started.";
+	// 先发空帧，避免界面显示旧图
+	this->handleFrame(nullptr, 0, 0, 0);
 
 	emit signalFrameInfo(this->getFrameInfo());
 
-	// 启动后设置曝光、亮度、对比度等参数（如果不是自动的话）. (有些驱动需要等开始拉帧了才会生效，所以放在这里设置)
-	QTimer::singleShot(100, this, [this]() {
-		if (!this->m_bExposureAuto)
-		{
-			this->setExposureValue(this->m_lExposure);
-		}
-		if (!this->m_bBrightnessAuto)
-		{
-			this->setBrightnessValue(this->m_lBrightness);
-		}
-		if (!this->m_bContrastAuto)
-		{
-			this->setContrastValue(this->m_lContrast);
-		}
-		});
+	qDebug() << this->m_strName << " started in sync mode.";
+
+	// 不要 while 循环，丢回 Qt 事件队列读第一帧
+	QMetaObject::invokeMethod(this, "readOneFrame", Qt::QueuedConnection);
+#endif
 }
 
 void EZCamera::stop()
 {
+#ifdef Q_OS_WIN
 	if (!this->m_bIsRunning.load(std::memory_order_acquire))
 	{
 		qDebug() << "m_bIsRunning == false";
-		return;
 	}
 
 	this->m_bIsRunning.store(false, std::memory_order_release);
 
-	IMFSourceReader* pReader = (IMFSourceReader*)this->m_pSourceReader;
-	IMFMediaSource* pSource = (IMFMediaSource*)this->m_pMediaSource;
-	IMFAttributes* pAttr = (IMFAttributes*)this->m_pAttributes;
+	IMFSourceReader* pReader = static_cast<IMFSourceReader*>(this->m_pSourceReader);
+	IMFMediaSource* pSource = static_cast<IMFMediaSource*>(this->m_pMediaSource);
+	IMFAttributes* pAttr = static_cast<IMFAttributes*>(this->m_pAttributes);
 
-	// 通知回调线程不要再继续读
-	SourceReaderCB* pCallback = (SourceReaderCB*)this->m_callback;
-	if (pCallback != nullptr)
+	if (pReader)
 	{
-		pCallback->m_bIsRunning.store(false, std::memory_order_release);
-
-
-		int n = 0;
-		// 等待回调线程退出（如果需要的话）
-		while (!pCallback->m_bExitedReadSample && n < 100)
-		{
-			Sleep(20); // 等待回调线程退出
-			n++;
-		}
-		pCallback->m_bExitedReadSample = true;
-		qDebug() << "callback exited.";
-	}
-
-	// 让 SourceReader 停止拉帧（非常关键）
-	if (pReader != nullptr)
-	{
-		// 关闭所有流
 		pReader->Flush(MF_SOURCE_READER_FIRST_VIDEO_STREAM);
+		pReader->Release();
+		this->m_pSourceReader = nullptr;
 	}
 
-	// 释放COM对象
-	if (pReader) { pReader->Release();  pReader = nullptr; this->m_pSourceReader = nullptr; }
-	if (pAttr) { pAttr->Release(); pAttr = nullptr; this->m_pAttributes = nullptr; }
-	if (pSource) { pSource->Shutdown(); pSource->Release();  pSource = nullptr; this->m_pMediaSource = nullptr; }
-	if (pCallback) { pCallback->Release(); m_callback = nullptr; }
+	if (pAttr)
+	{
+		pAttr->Release();
+		this->m_pAttributes = nullptr;
+	}
+
+	if (pSource)
+	{
+		pSource->Shutdown();
+		pSource->Release();
+		this->m_pMediaSource = nullptr;
+	}
 
 	qDebug() << this->m_strName << " stopped.";
+#endif
+}
+
+void EZCamera::readOneFrame()
+{
+#ifdef Q_OS_WIN
+	if (!this->m_bIsRunning.load(std::memory_order_acquire))
+	{
+		return;
+	}
+
+	IMFSourceReader* pReader = static_cast<IMFSourceReader*>(this->m_pSourceReader);
+	if (nullptr == pReader)
+	{
+		return;
+	}
+
+	DWORD streamIndex = 0;
+	DWORD flags = 0;
+	LONGLONG timestamp = 0;
+	IMFSample* pSample = nullptr;
+
+	HRESULT hr = pReader->ReadSample(
+		MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+		0,
+		&streamIndex,
+		&flags,
+		&timestamp,
+		&pSample);
+
+	if (FAILED(hr))
+	{
+		this->m_bIsRunning.store(false, std::memory_order_release);
+
+		QString strError = QString("ReadSample failed: %1").arg(HrToString(hr));
+		qDebug() << strError;
+
+		QCoreApplication::postEvent(
+			this->m_pRenderWidget,
+			new EZCameraDeviceErrorEvent(strError, 123));
+
+		if (pSample)
+		{
+			pSample->Release();
+			pSample = nullptr;
+		}
+
+		return;
+	}
+
+	if (flags & MF_SOURCE_READERF_ENDOFSTREAM)
+	{
+		this->m_bIsRunning.store(false, std::memory_order_release);
+
+		if (pSample)
+		{
+			pSample->Release();
+			pSample = nullptr;
+		}
+
+		return;
+	}
+
+	if (pSample)
+	{
+		IMFMediaType* pType = nullptr;
+		UINT32 width = 0;
+		UINT32 height = 0;
+		LONG stride = 0;
+
+		hr = pReader->GetCurrentMediaType(
+			MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+			&pType);
+
+		if (SUCCEEDED(hr) && pType)
+		{
+			MFGetAttributeSize(pType, MF_MT_FRAME_SIZE, &width, &height);
+
+			LONG lStride = 0;
+			if (SUCCEEDED(GetDefaultStride(pType, &lStride)))
+			{
+				stride = lStride;
+			}
+
+			pType->Release();
+			pType = nullptr;
+		}
+
+		IMFMediaBuffer* pBuffer = nullptr;
+		hr = pSample->ConvertToContiguousBuffer(&pBuffer);
+
+		if (SUCCEEDED(hr) && pBuffer)
+		{
+			BYTE* pData = nullptr;
+			DWORD maxLen = 0;
+			DWORD curLen = 0;
+
+			hr = pBuffer->Lock(&pData, &maxLen, &curLen);
+			if (SUCCEEDED(hr) && pData && width > 0 && height > 0 && stride > 0)
+			{
+				this->handleFrame(pData, width, height, stride);
+				pBuffer->Unlock();
+			}
+
+			pBuffer->Release();
+			pBuffer = nullptr;
+		}
+
+		pSample->Release();
+		pSample = nullptr;
+	}
+
+	// 继续读下一帧，但不要 while 死循环
+	if (this->m_bIsRunning.load(std::memory_order_acquire))
+	{
+		QMetaObject::invokeMethod(this, "readOneFrame", Qt::QueuedConnection);
+	}
+#endif
 }
 
 void EZCamera::handleFrame(void* data, int width, int height, int stride)

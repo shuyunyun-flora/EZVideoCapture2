@@ -53,6 +53,9 @@ public Q_SLOTS:
 	void start();
 	void stop();
 
+private Q_SLOTS:
+	void readOneFrame();
+
 Q_SIGNALS:
 	void signalFrameReady(const QByteArray& data, int width, int height, int stride);
 	void signalFrameInfo(QString strInfo);
@@ -65,7 +68,6 @@ private:
 	long SetHighestNV12(void* v_pSource);
 
 private:
-	void* m_callback = nullptr;
 	QString m_strName = "";
 
 	void* m_pMediaSource = nullptr;

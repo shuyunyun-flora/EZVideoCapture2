@@ -763,15 +763,14 @@ void EZVideoCaptureWindow::stopCamera()
 {
 	if (!m_pCamera) return;
 
-	// 1) 先断开信号（避免新的 queued 事件继续进来）
+	disconnect(m_pCamera, nullptr, m_pVideoRenderer, nullptr);
 	disconnect(m_pCamera, nullptr, this, nullptr);
 
-	// 2) 请求相机线程执行 stop（不要在 UI 线程直接操作相机对象）
 	QMetaObject::invokeMethod(m_pCamera, "stop", Qt::BlockingQueuedConnection);
+
 	this->m_pCamera->releaseControlInterfaces();
 
-	// 3) 结束线程，并等待完全退出
-	m_pCameraThread->quit();				// m_pCamera会在线程退出时自动 deleteLater（因为连接了线程的 finished 信号），所以这里不需要手动 delete m_pCamera）.
+	m_pCameraThread->quit();
 	m_pCameraThread->wait();
 
 	m_pCamera = nullptr;
