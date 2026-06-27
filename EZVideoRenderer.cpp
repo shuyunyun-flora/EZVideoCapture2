@@ -457,6 +457,8 @@ void EZVideoRenderer::onFrameReady(const QByteArray& nv12,
     {
         update();
     }
+
+    emit signalFrameConsumed();
 }
 
 void EZVideoRenderer::onFrameInfo(QString strInfo)

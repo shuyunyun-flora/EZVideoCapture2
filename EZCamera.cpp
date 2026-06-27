@@ -688,6 +688,11 @@ void EZCamera::stop()
 #endif
 }
 
+void EZCamera::onFrameConsumed()
+{
+	m_framePending.store(false, std::memory_order_release);
+}
+
 void EZCamera::readOneFrame()
 {
 #ifdef Q_OS_WIN
@@ -797,7 +802,7 @@ void EZCamera::readOneFrame()
 		pSample = nullptr;
 	}
 
-	// 继续读下一帧，但不要 while 死循环
+	// 继续读下一帧，但不要 while 无限循环
 	if (this->m_bIsRunning.load(std::memory_order_acquire))
 	{
 		QMetaObject::invokeMethod(this, "readOneFrame", Qt::QueuedConnection);
@@ -807,18 +812,27 @@ void EZCamera::readOneFrame()
 
 void EZCamera::handleFrame(void* data, int width, int height, int stride)
 {
-	const int yBytes = stride * height;
-	const int uvBytes = stride * height / 2;
-	const int total = yBytes + uvBytes;
-	QByteArray buf;
-	if (data != nullptr)
-	{
-		buf.resize((int)total);
-		memcpy(buf.data(), data, size_t(total));
-	}
 	if (!this->m_bIsRunning.load(std::memory_order_acquire))
 	{
 		return;
+	}
+
+	// GUI 还有一帧没处理完，就直接丢掉当前帧
+	bool expected = false;
+	if (!m_framePending.compare_exchange_strong(expected, true))
+	{
+		return;
+	}
+
+	const int yBytes = stride * height;
+	const int uvBytes = stride * height / 2;
+	const int total = yBytes + uvBytes;
+
+	QByteArray buf;
+	if (data != nullptr && total > 0)
+	{
+		buf.resize(total);
+		memcpy(buf.data(), data, size_t(total));
 	}
 
 	emit signalFrameReady(buf, width, height, stride);

@@ -752,6 +752,12 @@ void EZVideoCaptureWindow::startCamera(QString strName)
 	connect(this->m_pCamera, &EZCamera::signalFrameReady, this->m_pVideoRenderer, &EZVideoRenderer::onFrameReady, Qt::QueuedConnection);
 	connect(this->m_pCamera, &EZCamera::signalFrameInfo, this->m_pVideoRenderer, &EZVideoRenderer::onFrameInfo, Qt::QueuedConnection);
 
+	connect(this->m_pVideoRenderer,
+		&EZVideoRenderer::signalFrameConsumed,
+		this->m_pCamera,
+		&EZCamera::onFrameConsumed,
+		Qt::QueuedConnection);
+
 	this->m_pCameraThread->start();
 
 	this->m_pVideoRenderer->start();

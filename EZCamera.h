@@ -52,6 +52,7 @@ public:
 public Q_SLOTS:
 	void start();
 	void stop();
+	void onFrameConsumed();
 
 private Q_SLOTS:
 	void readOneFrame();
@@ -78,6 +79,7 @@ private:
 	void* m_pVideoProcAmp = nullptr;
 
 	std::atomic_bool m_bIsRunning{ false };
+	std::atomic_bool m_framePending{ false };
 	QByteArray m_lastFrameNv12;
 	int m_nFPS = 0;
 	int m_nFrameWidth = 0;

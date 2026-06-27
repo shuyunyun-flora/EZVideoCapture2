@@ -27,6 +27,9 @@ protected:
     bool event(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
 
+Q_SIGNALS:
+    void signalFrameConsumed();
+
 public Q_SLOTS:
     /**
     * 设置一帧 NV12 图像数据。
