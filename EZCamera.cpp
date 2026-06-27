@@ -644,6 +644,22 @@ void EZCamera::start()
 
 	emit signalFrameInfo(this->getFrameInfo());
 
+	// 启动后设置曝光、亮度、对比度等参数（如果不是自动的话）. (有些驱动需要等开始拉帧了才会生效，所以放在这里设置)
+	QTimer::singleShot(100, this, [this]() {
+		if (!this->m_bExposureAuto)
+		{
+			this->setExposureValue(this->m_lExposure);
+		}
+		if (!this->m_bBrightnessAuto)
+		{
+			this->setBrightnessValue(this->m_lBrightness);
+		}
+		if (!this->m_bContrastAuto)
+		{
+			this->setContrastValue(this->m_lContrast);
+		}
+		});
+
 	qDebug() << this->m_strName << " started in sync mode.";
 
 	// 不要 while 循环，丢回 Qt 事件队列读第一帧
