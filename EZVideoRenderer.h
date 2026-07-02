@@ -4,24 +4,30 @@
 #include <QOpenGLFunctions>
 #include <QOpenGLExtraFunctions>
 #include <QOpenGLShaderProgram>
+#include <QMatrix4x4>
 #include <QMutex>
 #include <QTimer>
 #include <QLabel>
 #include <QElapsedTimer>
+#include <QMouseEvent>
+#include <QWheelEvent>
+#include <QPoint>
+#include <QPointF>
+#include <QRectF>
 
 class EZVideoCaptureWindow;
 class EZVideoRenderer : public QOpenGLWidget, protected QOpenGLExtraFunctions
 {
-	Q_OBJECT
+    Q_OBJECT
 
 public:
-	explicit EZVideoRenderer(QWidget *parent = nullptr);
-	~EZVideoRenderer() override;
+    explicit EZVideoRenderer(QWidget* parent = nullptr);
+    ~EZVideoRenderer() override;
 
 public:
     void setFlipHorizontal(bool enable);
     void setFlipVertical(bool enable);
-	void setPreviewPresentFps(int fps);    // fps <= 0 表示 sync.
+    void setPreviewPresentFps(int fps);    // fps <= 0 表示 sync.
 
 protected:
     bool event(QEvent* event) override;
@@ -52,20 +58,27 @@ public Q_SLOTS:
     void stop();
 
 protected:
-	void initializeGL() override;
-	void resizeGL(int width, int height) override;
-	void paintGL() override;
-	void showEvent(QShowEvent* event) override;
+    void initializeGL() override;
+    void resizeGL(int width, int height) override;
+    void paintGL() override;
+    void showEvent(QShowEvent* event) override;
 
 protected:
     void wheelEvent(QWheelEvent* event) override;
-	void mousePressEvent(QMouseEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+
     QMatrix4x4 m_transform;
 
 private:
     void initTexturesIfNeeded();
     void updateStatusLabelPosition();
     void resetFpsInfo();
+
+    void rebuildViewTransform();
+    QRectF currentVideoRectInWidget() const;
+    QPointF widgetPosToNdc(const QPointF& pos) const;
 
 private:
     QMutex m_mutex;
@@ -93,7 +106,7 @@ private:
     QString m_strStatus;
     QString m_strError;
 
-	QLabel* m_pStatusLabel = nullptr;
+    QLabel* m_pStatusLabel = nullptr;
 
     QElapsedTimer m_fpsTimerIn;
     QElapsedTimer m_fpsTimerRender;
@@ -106,5 +119,11 @@ private:
     EZVideoCaptureWindow* m_pParentWnd = nullptr;
     QTimer* m_pPresentTick = nullptr;
     int m_nPresentFps = 0;                  // 0 表示sync.
+
+    bool    m_bMiddleDragging = false;
+    QPoint  m_lastMousePos;
+
+    float   m_viewScale = 1.0f;
+    QPointF m_viewOffsetNdc = QPointF(0.0, 0.0);
 };
 

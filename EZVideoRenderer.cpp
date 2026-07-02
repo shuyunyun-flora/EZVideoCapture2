@@ -12,6 +12,7 @@
 #include <QImage>
 #include <QImageWriter>
 #include <QStandardPaths>
+#include <cmath>
 
 #include "EZCameraDeviceErrorEvent.h"
 #include "EZVideoCaptureWindow.h"
@@ -79,27 +80,214 @@ void EZVideoRenderer::showEvent(QShowEvent* event)
 	}
 }
 
-void EZVideoRenderer::wheelEvent(QWheelEvent* event)
+QRectF EZVideoRenderer::currentVideoRectInWidget() const
 {
-    if (event->angleDelta().y() > 0) 
+    if (m_width <= 0 || m_height <= 0 || width() <= 0 || height() <= 0)
     {
-        m_transform.scale(1.1);
-    }
-    else 
-    {
-        m_transform.scale(0.9);
+        return QRectF();
     }
 
+    const float imgAspect = float(m_width) / float(m_height);
+    const float winAspect = float(width()) / float(height());
+
+    float sx = 1.0f;
+    float sy = 1.0f;
+
+    if (winAspect > imgAspect)
+    {
+        // 窗口更宽：高度铺满，左右留黑边
+        sx = imgAspect / winAspect;
+        sy = 1.0f;
+    }
+    else
+    {
+        // 窗口更窄 / 更高：宽度铺满，上下留黑边
+        sx = 1.0f;
+        sy = winAspect / imgAspect;
+    }
+
+    const float leftNdc = static_cast<float>(m_viewOffsetNdc.x()) - sx * m_viewScale;
+    const float rightNdc = static_cast<float>(m_viewOffsetNdc.x()) + sx * m_viewScale;
+    const float bottomNdc = static_cast<float>(m_viewOffsetNdc.y()) - sy * m_viewScale;
+    const float topNdc = static_cast<float>(m_viewOffsetNdc.y()) + sy * m_viewScale;
+
+    const double leftPx = (leftNdc + 1.0f) * 0.5f * width();
+    const double rightPx = (rightNdc + 1.0f) * 0.5f * width();
+    const double topPx = (1.0f - topNdc) * 0.5f * height();
+    const double bottomPx = (1.0f - bottomNdc) * 0.5f * height();
+
+    return QRectF(QPointF(leftPx, topPx), QPointF(rightPx, bottomPx)).normalized();
+}
+
+QPointF EZVideoRenderer::widgetPosToNdc(const QPointF& pos) const
+{
+    const double w = double(qMax(1, width()));
+    const double h = double(qMax(1, height()));
+
+    // QWidget 坐标：左上角是 (0, 0)，Y 向下。
+    // OpenGL NDC：中心是 (0, 0)，X 向右，Y 向上，范围 [-1, 1]。
+    const double x = 2.0 * pos.x() / w - 1.0;
+    const double y = 1.0 - 2.0 * pos.y() / h;
+
+    return QPointF(x, y);
+}
+
+void EZVideoRenderer::rebuildViewTransform()
+{
+    m_transform.setToIdentity();
+
+    // 视频先以自身中心缩放，再整体平移。
+    // Qt 的 QMatrix4x4 是后乘式接口，这里的调用顺序可以得到：T * S。
+    m_transform.translate(
+        static_cast<float>(m_viewOffsetNdc.x()),
+        static_cast<float>(m_viewOffsetNdc.y()),
+        0.0f);
+
+    m_transform.scale(m_viewScale, m_viewScale, 1.0f);
+}
+
+void EZVideoRenderer::wheelEvent(QWheelEvent* event)
+{
+    if (!m_hasFrame)
+    {
+        QOpenGLWidget::wheelEvent(event);
+        return;
+    }
+
+    const QPointF mousePos = event->position();
+
+    // 只允许在当前视频显示区域内滚轮缩放；黑边区域不处理。
+    if (!currentVideoRectInWidget().contains(mousePos))
+    {
+        QOpenGLWidget::wheelEvent(event);
+        return;
+    }
+
+    const int wheelDelta = event->angleDelta().y();
+    if (wheelDelta == 0)
+    {
+        QOpenGLWidget::wheelEvent(event);
+        return;
+    }
+
+    const double oldScale = double(m_viewScale);
+
+    // 一格滚轮通常是 120。使用 pow 可以兼容高精度触控板/滚轮。
+    double newScale = oldScale * std::pow(1.1, double(wheelDelta) / 120.0);
+
+    if (newScale < 0.05)
+    {
+        newScale = 0.05;
+    }
+    else if (newScale > 100.0)
+    {
+        newScale = 100.0;
+    }
+
+    // 如果已经到达缩放边界，就不用重复刷新。
+    if (qFuzzyCompare(newScale, oldScale))
+    {
+        event->accept();
+        return;
+    }
+
+    const QPointF mouseNdc = widgetPosToNdc(mousePos);
+
+    /*
+     * 当前变换是：screenNdc = offset + scale * objectNdc。
+     * 鼠标下的图像点 objectNdc = (mouseNdc - oldOffset) / oldScale。
+     * 要让缩放后这个图像点仍然落在 mouseNdc：
+     * newOffset = mouseNdc - newScale * objectNdc
+     *           = mouseNdc - (newScale / oldScale) * (mouseNdc - oldOffset)。
+     */
+    const double zoomRatio = newScale / oldScale;
+    const double newOffsetX = mouseNdc.x() - zoomRatio * (mouseNdc.x() - m_viewOffsetNdc.x());
+    const double newOffsetY = mouseNdc.y() - zoomRatio * (mouseNdc.y() - m_viewOffsetNdc.y());
+
+    m_viewScale = static_cast<float>(newScale);
+    m_viewOffsetNdc = QPointF(newOffsetX, newOffsetY);
+
+    rebuildViewTransform();
     update();
+
+    event->accept();
 }
 
 void EZVideoRenderer::mousePressEvent(QMouseEvent* event)
 {
-    if (event->button() == Qt::RightButton) 
+    if (event->button() == Qt::MiddleButton)
     {
-        m_transform = QMatrix4x4();
-		update();
+        if (!m_hasFrame || !currentVideoRectInWidget().contains(event->pos()))
+        {
+            QOpenGLWidget::mousePressEvent(event);
+            return;
+        }
+
+        m_bMiddleDragging = true;
+        m_lastMousePos = event->pos();
+
+        setCursor(Qt::ClosedHandCursor);
+        grabMouse();
+
+        event->accept();
+        return;
     }
+
+    if (event->button() == Qt::RightButton)
+    {
+        m_bMiddleDragging = false;
+
+        m_viewScale = 1.0f;
+        m_viewOffsetNdc = QPointF(0.0, 0.0);
+        rebuildViewTransform();
+
+        update();
+
+        event->accept();
+        return;
+    }
+
+    QOpenGLWidget::mousePressEvent(event);
+}
+
+void EZVideoRenderer::mouseMoveEvent(QMouseEvent* event)
+{
+    if (m_bMiddleDragging && (event->buttons() & Qt::MiddleButton))
+    {
+        const QPoint delta = event->pos() - m_lastMousePos;
+        m_lastMousePos = event->pos();
+
+        // 鼠标像素位移转换成 OpenGL NDC 位移。
+        // x: 左 -1，右 +1；y: 下 -1，上 +1。
+        const double dx = 2.0 * double(delta.x()) / double(qMax(1, width()));
+        const double dy = -2.0 * double(delta.y()) / double(qMax(1, height()));
+
+        m_viewOffsetNdc += QPointF(dx, dy);
+
+        rebuildViewTransform();
+        update();
+
+        event->accept();
+        return;
+    }
+
+    QOpenGLWidget::mouseMoveEvent(event);
+}
+
+void EZVideoRenderer::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::MiddleButton)
+    {
+        m_bMiddleDragging = false;
+
+        releaseMouse();
+        unsetCursor();
+
+        event->accept();
+        return;
+    }
+
+    QOpenGLWidget::mouseReleaseEvent(event);
 }
 
 void EZVideoRenderer::initializeGL()
