@@ -63,6 +63,7 @@ private:
 	bool m_bEnumeratingCameras = false;
 
 	QSlider* m_pSldExposure = nullptr;
+	QLabel* m_pLblExposureValue = nullptr;
 	QCheckBox* m_pChkExposureAuto = nullptr;
 
 	QSlider* m_pSldBrightness = nullptr;

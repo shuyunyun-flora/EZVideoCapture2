@@ -287,11 +287,18 @@ void EZVideoCaptureWindow::initLayout()
 		auto* lbl = new QLabel(tr("Exposure"), panel);
 		m_pSldExposure = new NoPageStepSlider(Qt::Horizontal, panel);
 		m_pSldExposure->setRange(-10, 10);
+
+		// 实时显示曝光滑块的当前值。
+		m_pLblExposureValue = new QLabel(QString::number(m_pSldExposure->value()), panel);
+		m_pLblExposureValue->setAlignment(Qt::AlignCenter);
+		m_pLblExposureValue->setFixedWidth(36);
+
 		m_pChkExposureAuto = new QCheckBox(tr("Auto"), panel);
 
-		layout->addWidget(lbl, 0, 0, 1, 2);
+		layout->addWidget(lbl, 0, 0, 1, 3);
 		layout->addWidget(m_pSldExposure, 1, 0);
-		layout->addWidget(m_pChkExposureAuto, 1, 1);
+		layout->addWidget(m_pLblExposureValue, 1, 1);
+		layout->addWidget(m_pChkExposureAuto, 1, 2);
 
 		pRow1->addWidget(panel, 1);
 	}
@@ -391,11 +398,17 @@ void EZVideoCaptureWindow::initLayout()
 		}
 		});
 	connect(this->m_pSldExposure, &QSlider::valueChanged, this, [this](int value) {
+		// 无论是否已连接相机，都实时刷新界面上的数值。
+		if (this->m_pLblExposureValue)
+		{
+			this->m_pLblExposureValue->setText(QString::number(value));
+		}
+		this->m_pSldExposure->setToolTip(QString::number(value));
+
 		if (this->m_pCamera && !this->m_pChkExposureAuto->isChecked())
 		{
 			this->m_pCamera->setExposureValue(value);
 			this->m_lExposureValue = value;
-			this->m_pSldExposure->setToolTip(QString::number(value));
 		}
 		});
 	connect(this->m_pSldExposure, &QSlider::sliderReleased, this, [this]() {
@@ -674,6 +687,10 @@ void EZVideoCaptureWindow::startCamera(QString strName)
 			this->m_pSldExposure->setSingleStep(stepV);
 			this->m_pSldExposure->setValue(this->m_lExposureValue);
 			this->m_pSldExposure->setToolTip(QString::number(this->m_lExposureValue));
+			if (this->m_pLblExposureValue)
+			{
+				this->m_pLblExposureValue->setText(QString::number(this->m_lExposureValue));
+			}
 			this->m_pChkExposureAuto->setEnabled(bSupportAutoExposure);
 			this->m_pChkExposureAuto->setChecked(bAuto);
 		}
