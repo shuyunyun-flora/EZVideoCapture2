@@ -661,19 +661,27 @@ void EZVideoRenderer::onTakePhoto()
     int height = 0;
     int stride = 0;
 
+    bool bNoFrame = false;
     {
         QMutexLocker locker(&m_mutex);
         if (!this->m_hasFrame || this->m_bufferNV12.isEmpty() ||
             m_width <= 0 || m_height <= 0 || m_stride <= 0)
         {
-            QMessageBox::warning(this, "Take Photo", "No frame available.");
-            return;
+            bNoFrame = true;
         }
+        else
+        {
+            localNV12 = m_bufferNV12;
+            width = m_width;
+            height = m_height;
+            stride = m_stride;
+        }
+	}
 
-        localNV12 = m_bufferNV12;
-        width = m_width;
-        height = m_height;
-        stride = m_stride;
+    if (bNoFrame)
+    {
+        QMessageBox::warning(this, "Take Photo", "No frame available.");
+        return;
     }
 
     // 选择保存目录
