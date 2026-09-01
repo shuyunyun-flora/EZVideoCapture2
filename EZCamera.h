@@ -4,6 +4,7 @@
 #include <QMutex>
 #include <QWaitCondition>
 #include <QElapsedTimer>
+#include <atomic>
 
 struct CameraInfo
 {
@@ -28,6 +29,7 @@ struct EZCameraFrame
 };
 
 class QWidget;
+class EZSourceReaderCallback;
 class EZCamera  : public QObject
 {
 	Q_OBJECT
@@ -77,15 +79,18 @@ public Q_SLOTS:
 	void stop();
 	void onFrameConsumed();
 
-private Q_SLOTS:
-	void readOneFrame();
-
 Q_SIGNALS:
 	void signalFrameReady(const QByteArray& data, int width, int height, int stride);
 	void signalFrameInfo(QString strInfo);
 
 private:
+	friend class EZSourceReaderCallback;
+
 	bool CreateVideoDeviceSource(void** ppSource);
+	bool requestNextSample();
+	void processAsyncSample(long hrStatus, unsigned long streamFlags, long long timestamp, void* pSample);
+	void cleanupCaptureResources();
+	void postCameraError(const QString& message, int value = 123);
 	void EnumerateCaptureFormats(void* v_pSource);
 	void SetDeviceFormat(void* v_pSource, unsigned long dwFormatIndex);
 	void SetDeviceMaxFrameRate(void* v_pSource, unsigned long dwTypeIndex);
@@ -97,12 +102,14 @@ private:
 	void* m_pMediaSource = nullptr;
 	void* m_pAttributes = nullptr;
 	void* m_pSourceReader = nullptr;
+	void* m_pSourceReaderCallback = nullptr;
 	void* m_pCapFilter = nullptr;
 	void* m_pCamCtrl = nullptr;
 	void* m_pVideoProcAmp = nullptr;
 
 	std::atomic_bool m_bIsRunning{ false };
 	std::atomic_bool m_framePending{ false };
+	bool m_bComInitializedOnCameraThread = false;
 	QByteArray m_lastFrameNv12;
 	int m_nFPS = 0;
 	int m_nFrameWidth = 0;
