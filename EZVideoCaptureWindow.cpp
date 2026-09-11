@@ -241,16 +241,35 @@ void EZVideoCaptureWindow::initLayout()
 
 	pGridLayout->setColumnMinimumWidth(0, 60);
 	pGridLayout->setColumnStretch(1, 1);
+	pGridLayout->setColumnStretch(2, 0);
 	pGridLayout->setRowMinimumHeight(0, 32);
 	pGridLayout->setRowStretch(1, 1);
 
 	// ¶¥²¿£º Camera Ñ¡Ôñ£¬ÅÄÕÕ
 	pGridLayout->addWidget(new QLabel(tr("Camera:")), 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
+
+	// Put the camera ComboBox and its status label in the same horizontal layout.
+	// This guarantees that the status text always starts exactly 4 px after the ComboBox.
+	auto* pCameraSelectLayout = new QHBoxLayout();
+	pCameraSelectLayout->setContentsMargins(0, 0, 0, 0);
+	pCameraSelectLayout->setSpacing(4);
+
 	this->m_pCmbCameras = new QComboBox();
-	this->m_pCmbCameras->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+	this->m_pCmbCameras->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 	this->m_pCmbCameras->setMinimumWidth(200);
 	connect(this->m_pCmbCameras, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &EZVideoCaptureWindow::onCameraSelectedIndexChanged);
-	pGridLayout->addWidget(this->m_pCmbCameras, 0, 1, Qt::AlignLeft | Qt::AlignVCenter);
+	pCameraSelectLayout->addWidget(this->m_pCmbCameras, 0, Qt::AlignLeft | Qt::AlignVCenter);
+
+	// Camera open status. Ready is reported only after the first valid frame.
+	this->m_pLblCameraStatus = new QLabel(this);
+	this->m_pLblCameraStatus->setText("");
+	this->m_pLblCameraStatus->setMinimumWidth(135);
+	this->m_pLblCameraStatus->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+	this->m_pLblCameraStatus->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+	pCameraSelectLayout->addWidget(this->m_pLblCameraStatus, 0, Qt::AlignVCenter);
+	pCameraSelectLayout->addStretch(1);
+
+	pGridLayout->addLayout(pCameraSelectLayout, 0, 1);
 
 	this->m_pBtnTakePhoto = new QPushButton(tr("Take Photo"));
 	this->m_pBtnTakePhoto->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
@@ -636,6 +655,16 @@ void EZVideoCaptureWindow::onCameraDeviceChanged(QString strSymbolicLink, bool b
 						if (bRemove)
 						{
 							this->stopCamera();
+							this->m_strLastCameraError = "Device lost";
+
+							if (this->m_pLblCameraStatus)
+							{
+								this->m_pLblCameraStatus->setText(tr("Open Failed"));
+								this->m_pLblCameraStatus->setStyleSheet(
+									"QLabel { color: #D32F2F; font-weight: 600; }");
+								this->m_pLblCameraStatus->setToolTip(tr("Device lost"));
+							}
+
 							QCoreApplication::postEvent(this->m_pVideoRenderer, new EZCameraDeviceErrorEvent("Device lost", 111));
 						}
 					}
@@ -656,8 +685,25 @@ void EZVideoCaptureWindow::startCamera(QString strName)
 
 	if (strName == "None")
 	{
+		if (this->m_pLblCameraStatus)
+		{
+			this->m_pLblCameraStatus->clear();
+			this->m_pLblCameraStatus->setStyleSheet("");
+			this->m_pLblCameraStatus->setToolTip("");
+		}
+
 		this->showFpsInfo(false);
 		return;
+	}
+
+	// Camera startup is asynchronous. Do not report success until EZCamera
+	// receives the first valid frame and emits signalCameraReady.
+	if (this->m_pLblCameraStatus)
+	{
+		this->m_pLblCameraStatus->setText(tr("Opening..."));
+		this->m_pLblCameraStatus->setStyleSheet(
+			"QLabel { color: #6B7280; font-weight: 600; }");
+		this->m_pLblCameraStatus->setToolTip("");
 	}
 
 	this->m_pCamera = new EZCamera(nullptr, strName);
@@ -788,6 +834,14 @@ void EZVideoCaptureWindow::startCamera(QString strName)
 			this->m_bCameraReady = true;
 			this->m_strLastCameraError.clear();
 
+			if (this->m_pLblCameraStatus)
+			{
+				this->m_pLblCameraStatus->setText(tr("Opened Successfully"));
+				this->m_pLblCameraStatus->setStyleSheet(
+					"QLabel { color: #2E7D32; font-weight: 600; }");
+				this->m_pLblCameraStatus->setToolTip("");
+			}
+
 			qDebug() << "Camera opened successfully:"
 				<< strName
 				<< width << "x" << height
@@ -810,6 +864,14 @@ void EZVideoCaptureWindow::startCamera(QString strName)
 
 			this->m_bCameraReady = false;
 			this->m_strLastCameraError = message;
+
+			if (this->m_pLblCameraStatus)
+			{
+				this->m_pLblCameraStatus->setText(tr("Open Failed"));
+				this->m_pLblCameraStatus->setStyleSheet(
+					"QLabel { color: #D32F2F; font-weight: 600; }");
+				this->m_pLblCameraStatus->setToolTip(message);
+			}
 
 			qWarning() << "Camera unavailable:" << strName << message;
 

@@ -63,6 +63,7 @@ private:
 
 private:
 	QComboBox* m_pCmbCameras = nullptr;
+	QLabel* m_pLblCameraStatus = nullptr;
 	QPushButton* m_pBtnTakePhoto = nullptr;
 	EZVideoRenderer* m_pVideoRenderer = nullptr;
 	EZCamera* m_pCamera = nullptr;
