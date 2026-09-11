@@ -650,6 +650,10 @@ void EZVideoCaptureWindow::onCameraDeviceChanged(QString strSymbolicLink, bool b
 
 void EZVideoCaptureWindow::startCamera(QString strName)
 {
+	const quint64 startGeneration = ++this->m_cameraStartGeneration;
+	this->m_bCameraReady = false;
+	this->m_strLastCameraError.clear();
+
 	if (strName == "None")
 	{
 		this->showFpsInfo(false);
@@ -657,6 +661,7 @@ void EZVideoCaptureWindow::startCamera(QString strName)
 	}
 
 	this->m_pCamera = new EZCamera(nullptr, strName);
+	EZCamera* const camera = this->m_pCamera;
 	this->m_pCamera->m_pRenderWidget = this->m_pVideoRenderer;
 	this->m_pCamera->initControlInterfaces();
 	{
@@ -769,21 +774,69 @@ void EZVideoCaptureWindow::startCamera(QString strName)
 	connect(this->m_pCamera, &EZCamera::signalFrameReady, this->m_pVideoRenderer, &EZVideoRenderer::onFrameReady, Qt::QueuedConnection);
 	connect(this->m_pCamera, &EZCamera::signalFrameInfo, this->m_pVideoRenderer, &EZVideoRenderer::onFrameInfo, Qt::QueuedConnection);
 
+	connect(camera, &EZCamera::signalCameraReady, this,
+		[this, camera, strName, startGeneration](int width, int height, int stride)
+		{
+			// Ignore a late queued result from a camera that has already been
+			// stopped/replaced.
+			if (startGeneration != this->m_cameraStartGeneration ||
+				camera != this->m_pCamera)
+			{
+				return;
+			}
+
+			this->m_bCameraReady = true;
+			this->m_strLastCameraError.clear();
+
+			qDebug() << "Camera opened successfully:"
+				<< strName
+				<< width << "x" << height
+				<< "stride:" << stride;
+
+			emit signalCameraReady(strName);
+		},
+		Qt::QueuedConnection);
+
+	connect(camera, &EZCamera::signalCameraError, this,
+		[this, camera, strName, startGeneration](const QString& message)
+		{
+			// The old camera may still have a queued error while the user has
+			// already switched to another device.
+			if (startGeneration != this->m_cameraStartGeneration ||
+				camera != this->m_pCamera)
+			{
+				return;
+			}
+
+			this->m_bCameraReady = false;
+			this->m_strLastCameraError = message;
+
+			qWarning() << "Camera unavailable:" << strName << message;
+
+			emit signalCameraError(strName, message);
+		},
+		Qt::QueuedConnection);
+
 	connect(this->m_pVideoRenderer,
 		&EZVideoRenderer::signalFrameConsumed,
 		this->m_pCamera,
 		&EZCamera::onFrameConsumed,
 		Qt::QueuedConnection);
 
-	this->m_pCameraThread->start();
-
+	// Put the renderer in running state before the worker can deliver the
+	// first queued frame.
 	this->m_pVideoRenderer->start();
-
 	this->showFpsInfo(true);
+
+	this->m_pCameraThread->start();
 }
 
 void EZVideoCaptureWindow::stopCamera()
 {
+	// Invalidate any already-queued ready/error notification from this camera.
+	++this->m_cameraStartGeneration;
+	this->m_bCameraReady = false;
+
 	if (!m_pCamera) return;
 
 	disconnect(m_pCamera, nullptr, m_pVideoRenderer, nullptr);

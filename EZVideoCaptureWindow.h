@@ -26,6 +26,9 @@ public:
 	void setRenderFPSText(QString strText);
 	void showFpsInfo(bool bShow);
 
+	bool isCameraReady() const { return m_bCameraReady; }
+	QString lastCameraError() const { return m_strLastCameraError; }
+
 protected:
 	void showEvent(QShowEvent* event) override;
 	void closeEvent(QCloseEvent* event) override;
@@ -35,6 +38,10 @@ protected:
 
 Q_SIGNALS:
 	void signalCameraDeviceChanged(QString strSymbolicLink, bool bConnect, bool bRemove);
+
+	// Window-level camera state notifications.
+	void signalCameraReady(QString cameraName);
+	void signalCameraError(QString cameraName, QString message);
 
 private Q_SLOTS:
 	void enumerateCameras();
@@ -61,6 +68,10 @@ private:
 	EZCamera* m_pCamera = nullptr;
 	QThread* m_pCameraThread = nullptr;
 	bool m_bEnumeratingCameras = false;
+
+	bool m_bCameraReady = false;
+	QString m_strLastCameraError;
+	quint64 m_cameraStartGeneration = 0;
 
 	QSlider* m_pSldExposure = nullptr;
 	QLabel* m_pLblExposureValue = nullptr;

@@ -63,6 +63,9 @@ public:
 	bool waitForNewFrame(EZCameraFrame& outFrame, int timeoutMs = 1000);
 	void clearFrameMarker();
 
+	bool isRunning() const { return m_bIsRunning.load(std::memory_order_acquire); }
+	bool isReady() const { return m_bCameraReady.load(std::memory_order_acquire); }
+
 private:
 	bool getVideoProcAmpRange(long property, long& min, long& max, long& step, long& def, long& flags) const;
 	bool setVideoProcAmpRange(long property, long value);
@@ -82,6 +85,12 @@ public Q_SLOTS:
 Q_SIGNALS:
 	void signalFrameReady(const QByteArray& data, int width, int height, int stride);
 	void signalFrameInfo(QString strInfo);
+
+	// Emitted exactly once when the first valid video frame is received.
+	void signalCameraReady(int width, int height, int stride);
+
+	// Emitted when camera startup or the active capture stream fails.
+	void signalCameraError(QString message);
 
 private:
 	friend class EZSourceReaderCallback;
@@ -108,6 +117,7 @@ private:
 	void* m_pVideoProcAmp = nullptr;
 
 	std::atomic_bool m_bIsRunning{ false };
+	std::atomic_bool m_bCameraReady{ false };
 	std::atomic_bool m_framePending{ false };
 	bool m_bComInitializedOnCameraThread = false;
 	QByteArray m_lastFrameNv12;

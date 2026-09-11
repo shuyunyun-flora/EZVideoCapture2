@@ -740,7 +740,13 @@ EZCamera::~EZCamera()
 
 void EZCamera::postCameraError(const QString& message, int value)
 {
+	// Any camera error means the camera is no longer considered ready.
+	this->m_bIsRunning.store(false, std::memory_order_release);
+	this->m_bCameraReady.store(false, std::memory_order_release);
+
 	qWarning() << message;
+	emit signalCameraError(message);
+
 	if (this->m_pRenderWidget)
 	{
 		QCoreApplication::postEvent(
@@ -755,6 +761,16 @@ void EZCamera::start()
 	if (this->m_bIsRunning.load(std::memory_order_acquire))
 	{
 		return;
+	}
+
+	this->m_bCameraReady.store(false, std::memory_order_release);
+	this->m_framePending.store(false, std::memory_order_release);
+
+	// Do not let a previous frame be mistaken for a frame from this startup.
+	{
+		QMutexLocker locker(&m_frameMutex);
+		m_latestFrame = EZCameraFrame();
+		m_clearedFrameId = m_frameId;
 	}
 
 	// This method runs on m_pCameraThread. COM must be initialized per thread.
@@ -856,7 +872,26 @@ void EZCamera::start()
 	if (!this->requestNextSample())
 	{
 		this->cleanupCaptureResources();
+		return;
 	}
+
+	// A SourceReader can be created successfully while a broken/blocked driver
+	// never delivers an actual frame. Treat "no first valid frame" as startup
+	// failure instead of remaining forever in an indeterminate state.
+	constexpr int kCameraStartupTimeoutMs = 5000;
+	QTimer::singleShot(kCameraStartupTimeoutMs, this, [this, kCameraStartupTimeoutMs]()
+		{
+			if (!this->m_bIsRunning.load(std::memory_order_acquire) ||
+				this->m_bCameraReady.load(std::memory_order_acquire))
+			{
+				return;
+			}
+
+			this->postCameraError(
+				QString("Camera startup timed out: no valid frame received within %1 ms.")
+					.arg(kCameraStartupTimeoutMs));
+			this->cleanupCaptureResources();
+		});
 #endif
 }
 
@@ -864,6 +899,7 @@ void EZCamera::stop()
 {
 #ifdef Q_OS_WIN
 	this->m_bIsRunning.store(false, std::memory_order_release);
+	this->m_bCameraReady.store(false, std::memory_order_release);
 	this->m_framePending.store(false, std::memory_order_release);
 
 	this->cleanupCaptureResources();
@@ -1108,6 +1144,19 @@ void EZCamera::handleFrame(void* data, int width, int height, int stride)
 			m_latestFrame.timestampMs = QDateTime::currentMSecsSinceEpoch();
 
 			m_frameWait.wakeAll();
+		}
+
+		// The first real frame is the definitive "camera ready" point.
+		bool expectedReady = false;
+		if (this->m_bCameraReady.compare_exchange_strong(
+			expectedReady, true, std::memory_order_acq_rel))
+		{
+			qDebug() << this->m_strName
+				<< "camera ready, first valid frame:"
+				<< width << "x" << height
+				<< "stride:" << stride;
+
+			emit signalCameraReady(width, height, stride);
 		}
 	}
 
