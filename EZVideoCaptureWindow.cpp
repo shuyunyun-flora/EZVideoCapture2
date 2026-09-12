@@ -899,22 +899,28 @@ void EZVideoCaptureWindow::stopCamera()
 	++this->m_cameraStartGeneration;
 	this->m_bCameraReady = false;
 
-	if (!m_pCamera) return;
+	if (nullptr != m_pCamera)
+	{
+		disconnect(m_pCamera, nullptr, m_pVideoRenderer, nullptr);
+		disconnect(m_pCamera, nullptr, this, nullptr);
 
-	disconnect(m_pCamera, nullptr, m_pVideoRenderer, nullptr);
-	disconnect(m_pCamera, nullptr, this, nullptr);
+		if (m_pCameraThread != nullptr && m_pCameraThread->isRunning())
+		{
+			QMetaObject::invokeMethod(m_pCamera, "stop", Qt::BlockingQueuedConnection);
+		}
 
-	QMetaObject::invokeMethod(m_pCamera, "stop", Qt::BlockingQueuedConnection);
+		this->m_pCamera->releaseControlInterfaces();
+	}
+	if (nullptr != m_pCameraThread)
+	{
+		m_pCameraThread->quit();
+		m_pCameraThread->wait();
 
-	this->m_pCamera->releaseControlInterfaces();
-
-	m_pCameraThread->quit();
-	m_pCameraThread->wait();
+		delete m_pCameraThread;
+		m_pCameraThread = nullptr;
+	}
 
 	m_pCamera = nullptr;
-
-	delete m_pCameraThread;
-	m_pCameraThread = nullptr;
 }
 
 void EZVideoCaptureWindow::onCameraSelectedIndexChanged(int iIndex)
