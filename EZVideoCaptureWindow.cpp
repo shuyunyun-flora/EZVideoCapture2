@@ -679,6 +679,13 @@ void EZVideoCaptureWindow::onCameraDeviceChanged(QString strSymbolicLink, bool b
 
 void EZVideoCaptureWindow::startCamera(QString strName)
 {
+	if (this->m_pCamera != nullptr ||
+		this->m_pCameraThread != nullptr)
+	{
+		this->stopCamera();
+		this->m_pVideoRenderer->stop();
+	}
+
 	const quint64 startGeneration = ++this->m_cameraStartGeneration;
 	this->m_bCameraReady = false;
 	this->m_strLastCameraError.clear();
